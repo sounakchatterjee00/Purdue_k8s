@@ -34,6 +34,16 @@ EOF
 $ sudo modprobe overlay
 $ sudo modprobe br_netfilter
 
+Step 2.1) Enabling ipaddress
+sudo tee /etc/sysctl.d/kubernetes.conf << EOT
+net.bridge.bridge-nf-call-ip6tables =1 #enabling ipv6
+net.bridge.bridge-nf-call-iptables =1 #enabling ipv4
+net.ipv4.ip_forward =1 #enabling ip forwaring
+EOT
+Step 2.2) Restart machine
+sudo sysctl --system
+
+
 Step 3) Install containerd run time( Make sure to run the following commands on all nodes )
 
 $ sudo apt install -y curl gnupg2 software-properties-common apt-transport-https ca-certificates
@@ -56,10 +66,15 @@ Restart and enable containerd service
 sudo systemctl restart containerd
 sudo systemctl enable containerd
 
-Step 4) Add apt repository for Kubernetes
+Step 4) Add Kubernetes Signing Key
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
-sudo apt-add-repository "deb http://apt.kubernetes.io/ kubernetes-xenial main"
+Step 4.1) Add Software Repositories
+echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+
+*remove repo if wrongly added
+cd /etc/apt/sources.list.d
+sudo rm -rf kubernetes.list
 
 Step 5) Install Kubernetes components Kubectl, kubeadm & kubelet
 
