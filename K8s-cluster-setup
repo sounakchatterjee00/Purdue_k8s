@@ -1,94 +1,117 @@
-Lab Setup
-Master Node:  172.31.35.217 – master.example.net
-First Worker Node:  172.31.37.183 – worker-1.example.net
-Second Worker Node:  172.31.44.138 – worker-2.example.net
+https://github.com/mialeevs/kubernetes_installation_docker
 
-Step 1) Set hostname and add entries in the hosts file
+Step 1-7 --> execute on master and worker both
+Step 8,10 and 11 --> on master
+Step 9 --> on worker
 
-$ sudo hostnamectl set-hostname "master.example.net"
-$ exec bash
+create machines for master and worker (minimum 2 CPU and 2 GB are required) with ubuntu operating system
+===================================================================================================
+1. Add GPG key for Docker
 
-On the worker nodes, run
+sudo su -
+wget -O - https://download.docker.com/linux/ubuntu/gpg > ./docker.key #download docker.key
+gpg --no-default-keyring --keyring ./docker.gpg --import ./docker.key #import docker.gpg from docker.key
+gpg --no-default-keyring --keyring ./docker.gpg --export > ./docker-archive-keyring.gpg # export docker.gpg to cache
+sudo mv ./docker-archive-keyring.gpg /etc/apt/trusted.gpg.d/
 
-$ sudo hostnamectl set-hostname "worker-1.example.net"   // 1st worker node
-$ sudo hostnamectl set-hostname "worker-2.example.net"   // 2nd worker node
-$ exec bash
+2. Add docker repository and install docker
 
-Add the following entries in /etc/hosts file on each node
-
-172.31.35.217  master.example.net
-172.31.37.183  worker-1.example.net
-172.31.44.138  worker-2.example.net
-
-Step 2) Disable swap & add kernel settings
-
-$ sudo swapoff -a
-$ sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
-
-Load the following kernel modules on all the nodes,
-
-$ sudo tee /etc/modules-load.d/containerd.conf <<EOF
-overlay
-br_netfilter
-EOF
-$ sudo modprobe overlay
-$ sudo modprobe br_netfilter
-
-Step 2.1) Enabling ipaddress
-sudo tee /etc/sysctl.d/kubernetes.conf << EOT
-net.bridge.bridge-nf-call-ip6tables =1 #enabling ipv6
-net.bridge.bridge-nf-call-iptables =1 #enabling ipv4
-net.ipv4.ip_forward =1 #enabling ip forwaring
-EOT
-Step 2.2) Restart machine
-sudo sysctl --system
-
-
-Step 3) Install containerd run time( Make sure to run the following commands on all nodes )
-
-$ sudo apt install -y curl gnupg2 software-properties-common apt-transport-https ca-certificates
-
-Enable docker repository
-
-$ sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmour -o /etc/apt/trusted.gpg.d/docker.gpg
-$ sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
-
-$ sudo apt update
-$ sudo apt install -y containerd.io
-
-Configure containerd so that it starts using systemd as cgroup.
-
-containerd config default | sudo tee /etc/containerd/config.toml >/dev/null 2>&1
-sudo sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
-
-Restart and enable containerd service
-
-sudo systemctl restart containerd
-sudo systemctl enable containerd
-
-Step 4) Add Kubernetes Signing Key
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-Step 4.1) Add Software Repositories
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-
-*remove repo if wrongly added
-cd /etc/apt/sources.list.d
-sudo rm -rf kubernetes.list
-
-Step 5) Install Kubernetes components Kubectl, kubeadm & kubelet
-
+sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
 sudo apt update
-sudo apt install -y kubelet kubeadm kubectl
-sudo apt-mark hold kubelet kubeadm kubectl
+sudo apt install git wget curl -y
+sudo apt install -y docker-ce
+#docker and containerd get install while installing docker both are the product of same company.
+#containerd is the pre-requisite for installing docker
 
-Step 6) Initialize Kubernetes cluster with Kubeadm command
+3. Install cri-dockerd for Docker support by k8s
 
-sudo kubeadm init --control-plane-endpoint=controller
+VER=$(curl -s https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest|grep tag_name | cut -d '"' -f 4|sed 's/v//g') #get the lastest version of docker
+echo $VER # check the latest docker version
+wget https://github.com/Mirantis/cri-dockerd/releases/download/v${VER}/cri-dockerd-${VER}.amd64.tgz #download tarball of CRI packages of docker
+tar xvf cri-dockerd-${VER}.amd64.tgz #extract the tarball
+ls -al # check the present ownership of cri-dockerd
+chown -R root:docker cri-dockerd # change the ownership from your user to root user
+ls -al cri-dockerd #check the actual package
+sudo mv cri-dockerd/cri-dockerd /usr/local/bin/ # move the CRI packages (purpose of moving to /usr/local/bin so that any user can access that , /usr/bin only root and previledge user can access)
 
-Step 7) Install Calico Pod Network Add-on
+wget https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.service # download servic file of CRI
+wget https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.socket # download socket file of CRI
+ls -al #check the service and socket files
+sudo mv cri-docker.socket cri-docker.service /etc/systemd/system/ # move the both the file in system service directory
+ls -al /etc/systemd/system/ # check the files in system directory
 
-curl https://projectcalico.docs.tigera.io/manifests/calico.yaml -O
-kubectl apply -f calico.yaml
+sudo sed -i -e 's,/usr/bin/cri-dockerd,/usr/local/bin/cri-dockerd,' /etc/systemd/system/cri-docker.service #Correcting the service file path (in cri-docker.service the default path is /usr/bin/cri-dockerd but our file is copied to /usr/local/bin/)
+# reload then enabling the service and socket
+sudo systemctl daemon-reload
+sudo systemctl enable cri-docker.service
+sudo systemctl enable --now cri-docker.socket
+
+4. Add the GPG key for kubernetes
+
+mkdir -p /etc/apt/keyrings/ #-p ==create the directory only if it not exists
+curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
 
+5. Add kubernetes repository
+
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list  #download and export (you can change the version(v1.28) as your wish but 2 less version considere as more stable)
+
+
+6. Update the repositories
+
+sudo apt-get update
+
+
+7. Install Kubernetes packages.
+
+sudo apt-get install -y kubelet kubeadm kubectl
+
+
+8. Execute below command on master node to initialize kubernetes cluster
+
+sudo kubeadm init --apiserver-advertise-address=<master-ip-address> --cri-socket unix:///var/run/cri-dockerd.sock  --pod-network-cidr=10.244.0.0/16
+# replace the <master-ip-address> with server private ip (cmd- ip a) this argument is not mandatory but if your machine have multiple ip then you have to mention one
+#--cri-socket unix:///var/run/cri-dockerd.sock -- this is also optional k8s can auto detect the CRI-socket but if you are useing 2 different CRI (docker && CRI-O) then you have to mention one
+#--pod-network-cidr=10.244.0.0/16 --this is the private network , here we are mentioning the subnet ip (i.e 10.244.0.0/16)
+
+output of init command will give you kubeadm join command that needs to be executed on worker node
+in case join command is lost we can get it again
+kubeadm token create --print-join-command
+
+#from the o/p file , kuectl need to know the address of master so below config is helps kubectl to know the master from .kube/config and get authorization to login in master
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+
+
+9. Add the worker node, execute below command on worker node
+
+kubeadm join <master-ip-address>:6443 --cri-socket unix:///var/run/cri-dockerd.sock --token st99ja.3bulo53e3wlmunbk --discovery-token-ca-cert-hash sha256:41dfafa343841da6a5460f8fa89647192ec1c7f46b3029c280ff4063b940041f
+
+#replace this command with the o/p of step number 8 , just add --cri-socket unix:///var/run/cri-dockerd.sock to determine the CRI for example 
+kubeadm join 10.128.0.2:6443 --cri-socket unix:///var/run/cri-dockerd.sock --token zfh90s.pkz92x7k9f9jw58d \
+        --discovery-token-ca-cert-hash sha256:1651a687c336501f371170c078d160b7c72b067baf749dc4955ab88828f98b7c
+		
+# to run cmd in Worker nodes--> kubectl get nodes (you have to copy .kube/config file to workernode from master
+
+
+10. Deploy pod network on master, network will be created automatically on all nodes that are part of cluster
+
+There are many network plugins available calico and flannel are 2 most popular ones
+
+Flannel -->
+kubectl apply -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel.yml
+
+Calico --> 
+
+kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/tigera-operator.yaml
+curl https://raw.githubusercontent.com/projectcalico/calico/v3.25.0/manifests/custom-resources.yaml -O
+kubectl create -f custom-resources.yaml
+
+
+11. Test operations
+
+kubectl get nodes
+kubectl run firstpod --image=nginx
+kubectl expose po firstpod --type=NodePort --port 80 --name firstsvc
